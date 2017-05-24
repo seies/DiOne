@@ -1,0 +1,278 @@
+# vim:ft=sh
+
+. env_var_definitions.sh
+guess_module () {
+    local retval=0
+    CHECKED_MODULE=()
+    ps -ef | grep gse_dba.conf | grep -vq grep; (( retval += $? ))
+    ps -ef | grep nginx        | grep -vq grep; (( retval += $? ))
+    ps -ef | grep zookeeper    | grep -vq grep; (( retval += $? ))
+    ps -ef | grep tomcat       | grep -vq grep; (( retval += $? ))
+    ps -ef | grep mysqld_safe  | grep -vq grep; (( retval += $? ))
+    ps -ef | grep aas/open_paas| grep -vq grep; (( retval += $? ))
+    ps -ef | grep license      | grep -vq grep; (( retval += $? ))
+
+    if [ $retval -le 2 ]; then
+        echo "从进程列表中看,本机像是安装了基础模块,请确认"
+        read -p "本机是安装基础模块(安装时执行install paas) 所在机器吗? y/n [y]" reply
+
+        if [ "$reply" == 'y' ]; then
+            CHECKED_MODULE[0]=paas
+        fi
+    fi
+
+    retval=0
+    ps -ef | grep 'paas_agent$' | grep -vq grep; (( retval += $? ))
+    ps -ef | grep 'rabbitmq'    | grep -vq grep; (( retval += $? ))
+    ps -ef | grep 'paasagent.*supervisord.conf' | grep -vq grep ; (( retval += $? ))
+
+    if [ $retval -le 1 ]; then
+        echo "从进程列表中看,本机像是安装了paasagent,请确认"
+        read -p "本机是安装基础模块(安装时执行install paasagent) 所在机器吗? y/n [y]" reply
+
+        if [ "$reply" == "y" ]; then
+            CHECKED_MODULE[1]=paasagent
+        fi
+    fi
+}
+
+deploy_summary () {
+    case $1 in 
+        paas)
+            green_echo "基础模块包含以下服务,启动基础模块需要启动以下所有服务"
+            _summary_openpaas
+            _summary_nginx
+            _summary_mysql
+            _summary_gse 
+            _summary_redis
+#            _summary_java
+            _summary_job
+            _summary_cmdb
+#            _summary_saas
+            ;;
+        paasagent)
+            green_echo "app 正式环境或测试包含以下服务,启动app环境需要启动以下所有服务"
+            green_echo "rabbitmq 只需要在其中一台启动即可"
+            _summary_nginx
+            _summary_paasagent
+            _summary_rabbitmq
+            ;;
+        datasvr|bkdata)
+            green_echo "datasvr 模块包含以下服务"
+            _summary_kafka
+            _summary_elasticsearch
+            _summary_beanstalkd
+            _summary_redis
+
+            red_echo "启动datasvr 所有服务,只需要运行:"
+            echo "  common/python/bin/supervisord -c datasvr/bk_conf/common/supervisord.conf"
+            echo
+            ;;
+        *)
+            echo "error: unkown module $1. only paas, paasagent, bkdata is supported"
+            exit 1
+            ;;
+    esac
+}
+
+_summary_bkarchive () {
+    :
+}
+
+_summary_elasticsearch () {
+    purple_echo ---ELASTICSEARCH---
+    echo "install path:     common/elasticsearch"
+    echo "data path:        bk_run_data/es"
+    echo "log path:         datasvr/logs/common/es"
+    echo
+}
+
+_summary_beanstalkd () {
+    purple_echo ---BEANSTALKD---
+    echo "install path:     common/elasticsearch"
+    echo "bind address:     $(ps -ef | grep beanstalkd | grep -v grep | awk '{print $NF}')"
+    echo "data path:        bk_run_data/es"
+    echo "log path:         datasvr/logs/common/es"
+    echo 
+}
+
+_summary_kafka () {
+    purple_echo ---KAFKA---
+    echo "install path:     common/kafka"
+    echo "install host:     localhost"
+    echo "data path:        bk_run_data/kafka"
+    echo "log path:         datasvr/logs/common/kafka"
+    echo ""
+}
+
+_summary_redis () {
+    purple_echo ---REDIS---
+    echo "install path:     common/redis"
+    echo "bind address:     $(ps -ef | grep redis-server | grep -v grep | awk '{print $NF}')"
+    echo "data path:        common/redis/data"
+    echo "log path:         common/redis/log"
+    echo "start:            common/redis/redis-server.sh start"
+    echo "stop:             common/redis/redis-server.sh stop"
+}
+
+_summary_rabbitmq () {
+    [ -d $TARGET_VERSION_PATH/paas/service/rabbitmq ] || return
+
+    purple_echo ---RABBITMQ---
+    echo "install path:     paas/service/rabbitmq"
+    echo "ENV variables:    paas/service/rabbitmq/etc/rabbitmq/rabbitmq-env.conf"
+    echo "config path:      paas/service/rabbitmq/etc/rabbitmq"
+    echo "binary path:      paas/service/rabbitmq/sbin/"
+    echo "start rabbitmq:"
+    echo "      step 1. paas/service/rabbitmq/sbin/rabbitmq-server -detached"
+    echo "      step 2. paas/service/rabbitmq/sbin/rabbitmqctl start_app"
+    echo "log path:         paas/service/rabbitmq/var/log"
+    echo 
+}
+
+_summary_openpaas () {
+    purple_echo ---OPEN_PAAS---
+    echo "open_paas path:    paas/open_paas"
+    echo "python version:    $($DIR_HOME/paas/env/bin/python --version 2>&1| awk '{print $2}') (modfied by blueking)"
+    echo "module env path:   paas/env/   (where python ,supervisord, etc. located)"
+    echo "project env path:  paas/open_paas/Envs"
+    echo "   projects:  $(cd $DIR_HOME/paas/open_paas/Envs/; echo *)"
+    echo "log dir:           paas/open_paas/logs"
+    echo "start supervisord: paas/env/bin/supervisord -c paas/open_paas/bin/supervisord.conf"
+    echo "status query:      paas/env/bin/supervisorctl -c paas/open_paas/bin/supervisord.conf status"
+    echo "start project:     paas/env/bin/supervisorctl -c paas/open_paas/bin/supervisord.conf start \${project_name}"
+    echo "more action:       paas/env/bin/supervisorctl -c paas/open_paas/bin/supervisord.conf help"
+    echo ""
+
+}
+
+_summary_java () {
+    purple_echo ---JAVA---
+    echo "$($DIR_HOME/common/java/bin/java -version | head -1)"
+    echo "JAVA_HOME:        common/java"
+    echo "LIBRARY_PATH:     common/java/lib" 
+    echo
+}
+
+_summary_cmdb () {
+    purple_echo ---CMDB---
+    echo "PHP version:      $($DIR_HOME/common/php/bin/php-config --version)"
+    echo "Zend Engine:      $($DIR_HOME/common/php/bin/php -version | tail -1 |awk -F'[ ,]+' '{print $3}')"
+    echo "PHP CONFIGFILE:   common/php/etc/php.ini"
+    echo "cmdb path:        cmdb/cc_opensource"
+    echo "cmdb config files:"
+    find cmdb -name "*.tpl" | sed 's/.tpl//;s/^/      /'
+    echo
+
+}
+
+_summary_nginx () {
+    purple_echo ---NGINX---
+    echo "$($DIR_HOME/common/nginx/sbin/nginx -v)"
+    echo "nginx path:       $DIR_HOME/common/nginx"
+    echo "main config file: common/nginx/conf/nginx.conf"
+    echo "  included config:"
+
+    for i in $DIR_HOME/common/nginx/nginx_conf/*.conf; do
+        echo "      $i"
+    done
+
+    echo "  access log:"
+
+    all=($(grep -Po '(?<=access_log)[\s]+\S+' nginx.conf ../nginx_conf/*.conf 2>/dev/null | awk '{print $2}' | sort -u))
+    for i in  ${all[@]}; do
+        if [ "$i" == "" ]; then
+            echo "      $i"
+        else
+            echo "      common/nginx/$i"
+        fi
+    done
+
+    echo "   error log:"
+    echo "reload nginx: common/nginx/sbin/nginx.sh reload"
+    echo "start nginx:  common/nginx/sbin/nginx.sh start"
+    echo "more action:  common/nginx/sbin/nginx.sh -h"
+    echo ""
+}
+
+_summary_mysql () {
+    purple_echo ---MYSQL---
+    echo "mysql path:  $DIR_HOME/common/mysql"
+    echo "config file: common/mysql/my.cnf"
+    echo "start mysql: common/mysql/mysqld.sh start"
+    echo "stop mysql:  common/mysql/mysqld.sh stop"
+    echo "log file:    common/mysql/data/$(hostname).err" 
+    echo ""
+}
+
+_summary_gse () {
+    purple_echo ---GSE---
+    echo "gse path: $DIR_HOME/gse, /usr/local/gse (gseagent 安装位置)"
+    echo "gse modules located:"
+    find $DIR_HOME/gse -type d -name "gse*" | sed 's/^/      /'
+    echo "log directories": 
+    find $DIR_HOME/gse -type d -name "logs" | sed 's/^/      /'
+    echo "启动: 各目录下的start.sh"
+    echo "停止: 各目录下的quit.sh"
+    red_echo "    Note: 必须先启动gsedba 及 yydba 下的进程"
+    echo ""
+    echo 
+}
+
+_summary_job () {
+    purple_echo ---JOB---
+    echo "job path:     $DIR_HOME/job"
+    echo "project path: job/apache-tomcat-7.0.19/webapps/ROOT"
+    echo "certs dir:    job/apache-tomcat-7.0.19/webapps/job/apache-tomcat-7.0.19/webapps/ROOT/WEB-INF/classes"
+    echo "logs dir:     job/apache-tomcat-7.0.19/webapps/logs"
+    echo "              job/apache-tomcat-7.0.19/logs"
+    echo "start job:    job/job.sh start"
+    echo "stop job:     job/job.sh stop"
+    echo "configs for nginx:    $DIR_HOME/common/nginx/nginx_conf/job.conf"
+    echo
+}
+
+_summary_saas () {
+    :
+}
+
+_summary_paasagent () {
+    purple_echo ---PAASAGENT---
+    echo "install path:         paas/paas_agent"
+    echo "python version:       $($DIR_HOME/paas/paas_agent/env/bin/python --version 2>&1 | awk '{print $2}') (modfied by blueking)"
+    echo "env path:             paas/env/   (where python ,supervisord, etc. located)"
+    echo "supervisor config:    paas/paas_agent/paasagent/etc/supervisord.conf"
+    echo "certificates dir:     paas/paas_agent/paasagent/etc/"
+    echo "configs for nginx:    common/nginx/nginx_conf/paasagent.conf"
+    echo "start paasagent:      paas/paas_agent/env/supervisord -c paas/paasagent/paasagent/etc/supervisord.conf"
+    echo 
+}
+
+red_echo () { echo -e "\033[041;1m$@\033[0m"; }
+green_echo () { echo -e "\033[042;1m$@\033[0m"; }
+yellow_echo () { echo -e "\033[043;1m$@\033[0m"; }
+blue_echo () { echo -e "\033[044;1m$@\033[0m"; }
+purple_echo () { echo -e "\033[045;1m$@\033[0m"; }
+
+status_summary () {
+    local module=${1}
+
+    case ${module} in
+        paas)
+            $DIR_HOME/common/monit/bin/monit -c $DIR_HOME/common/monit/conf/monitrc summary
+            $DIR_HOME/paas/env/bin/supervisorctl -c $DIR_HOME/paas/open_paas/bin/supervisord.conf status
+            ;;
+        paasagent)
+            $DIR_HOME/paas/paas_agent/env/bin/supervisorctl -c $DIR_HOME/paas/paas_agent/paasagent/etc/supervisord.conf status
+            if [ -d $DIR_HOME/paas/service/rabbitmq ]; then
+                if ps -ef | grep beam.smp | grep -vq grep; then
+                    $DIR_HOME/paas/service/rabbitmq/sbin/rabbitmqctl cluster_status
+                fi
+            fi
+            ;;
+        datasvr|bkdata)
+            $DIR_HOME/common/python/bin/supervisorctl -c $DIR_HOME/datasvr/bk_conf/common/supervisord.conf status
+            ;;
+    esac
+}
+

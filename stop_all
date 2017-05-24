@@ -1,0 +1,34 @@
+#!/bin/bash
+
+cd ${BASH_SOURCE%/*} 2>/dev/null
+TARGET_VERSION_PATH=${PWD}
+
+source commmon/function
+source upgrade/utils
+
+paas_service_list=(license zookeeper mysql redis nginx cmdb job gse bkarchive monit)
+paasagent_service_list=(paasagent rabbitmq nginx)
+datasvr_service_list=(beanstalkd)
+
+cd $TARGET_VERSION_PATH
+if [ -f .installed_module ]; then
+    for i in $(cat .installed_module); do
+        case $i in
+            paas)
+                for i in ${paas_service_list[@]} ; do
+                    mute $i
+                done
+
+                $TARGET_VERSION_PATH/paas/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/open_paas/bin/supervisord.conf shutdown
+            ;;
+            paasagent)
+                $TARGET_VERSION_PATH/paas/paas_agent/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/paas_agent/etc/supervisord.conf shutdown
+            ;;
+            datasvr)
+                common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf shutdown
+            ;;
+        esac
+    done
+fi

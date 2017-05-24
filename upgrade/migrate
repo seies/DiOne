@@ -1,0 +1,277 @@
+#!/bin/bash
+# powered by blueking
+
+usage () {
+    echo ""
+    echo "USAGE: migrate src_version_path {paas|paasagent}"
+    echo ""
+    echo "  src_version_path: a path of old version located"
+    echo "  ssl_file: absolute path of new ssl certificate file"
+
+    exit 0
+}
+
+confirm_required () {
+    echo ""
+    echo "      bksuite upgrade manager. version 1.0.0"
+    echo "-------------------------------------------------"
+    echo "this upgrade program support for upgrading bkv2.0.1 to 3.0"
+    echo "本程序用于将DiOne 2.0.x升级到3.0 (含所有子版本), 请确认版本是否相符"
+    read -p "y/n ? [n] " reply
+
+    if [ $reply != "y" ]; then
+        exit
+    fi
+
+    echo "本次升级需要用到配置文件bk.conf, 请根据要求编辑好bk.conf。"
+    echo "检测到目标版本中的bk.conf 文件如下:"
+    echo "-------------------------------------------------"
+    cat $TARGET_VERSION_PATH/bk.conf
+    echo "-------------------------------------------------"
+    read -p "请确认以上配置是否正确 y/n? [n]" reply
+
+    if [ "$reply" != "y" ]; then
+        exit
+    fi
+
+    return 0
+}
+
+upgrade_db () {
+    step "STEP 2: upgrade db: mysql + redis"
+    step " -- backup mysql"
+    _backup_mysql $SOURCE_VERSION_PATH/common/mysql \
+                  $SOURCE_VERSION_PATH/common/mysql/my.cnf \
+                  $TARGET_VERSION_PATH/backup/mysql/
+    if [ $? -ne 0 ]; then
+        echo "backup mysql failed"
+        exit 1
+    fi
+    step "  mysql bakcup files as fellow, please check if it is ok"
+    ls -l $TARGET_VERSION_PATH/backup/mysql
+    read -p "continue y/n ? [n]" reply
+    [ "$reply" != "y" ] && exit
+
+    step " -- backup redis"
+    _backup_redis $SOURCE_VERSION_PATH/common/redis \
+                  $SOURCE_VERSION_PATH/common/redis/conf/redis.conf \
+                  $TARGET_VERSION_PATH/backup/redis
+    if [ $? -ne 0 ]; then
+        echo "backup redis failed"
+        exit 1
+    fi
+    step "  redis bakcup files as fellow, please check if it is ok"
+    ls -l $TARGET_VERSION_PATH/backup/redis
+
+    read -p "continue y/n ? [n]" reply
+    [ "$reply" != "y" ] && exit
+
+    step " -- stop old mysql, redis"
+    mute mysql
+    mute redis
+
+    sleep 2
+    step " -- start new mysql"
+    render_cfg_template common/mysql
+    render_cfg_template common/redis
+
+    if [ -f $TARGET_VERSION_PATH/common/mysql/my.cnf ]; then
+        start mysql
+        [ $? -ne 0 ] && exit 3
+    else
+        log "my.cnf does not generated. please check."
+        exit 4
+    fi
+
+    if ! ps -ef | grep mysqld_safe | grep -v grep; then
+        log "start mysql failed"
+        exit 0
+    fi
+
+    step "STEP 3: restore mysql and redis first. it is required by paas,job for upgrading"
+    _restore_mysql $TARGET_VERSION_PATH/common/mysql \
+                   $TARGET_VERSION_PATH/common/mysql/my.cnf \
+                   $TARGET_VERSION_PATH/backup/mysql/bkv2.0.sql
+
+    if [ $? -ne 0 ]; then
+        echo "restore mysql failed"
+        exit 1
+    fi
+
+    read -p "continue y/n ? [n]" reply
+    [ "$reply" != "y" ] && exit
+
+    _restore_redis $TARGET_VERSION_PATH/common/redis \
+                   $TARGET_VERSION_PATH/common/redis/conf/redis.conf \
+                   $TARGET_VERSION_PATH/backup/redis
+
+    if [ $? -ne 0 ]; then
+        echo "restore redis failed"
+        exit 1
+    fi
+
+    read -p "continue y/n ? [n]" reply
+    [ "$reply" != "y" ] && exit
+
+}
+
+
+if [ $# -ne 2 ]; then
+    usage
+fi
+
+export LC_ALL=en_US.UTF-8
+cd ${BASH_SOURCE%/*} 2>/dev/null
+
+export SOURCE_VERSION_PATH=$1
+export module=$2
+export TARGET_VERSION_PATH=${PWD%/upgrade*}
+export SSL_CERTIFICATE_FILE=$TARGET_VERSION_PATH/ssl_certificates.tar.gz
+
+export PATH=$TARGET_VERSION_PATH/common/mysql/bin:$TARGET_VERSION_PATH/common/java/bin:$PATH
+export LD_LIBRARY_PATH=$TARGET_VERSION_PATH/common/mysql/lib:$TARGET_VERSION_PATH/common/zookeeper/zklib/lib:$LD_LIBRARY_PATH
+
+case $module in
+    paas) proj_list=(monit gse paas job cmdb nginx zookeeper license) ;;
+    paasagent) proj_list=(monit nginx paasagent rabbitmq) ;;
+    *) echo "Invalid module name. only paas or paasgent is supported" ;;
+esac
+
+[ ! -d $SOURCE_VERSION_PATH  ] && { echo "指定的旧版本目录不存在"; exit 1; }
+[ ! -f $SSL_CERTIFICATE_FILE ] && { echo "证书文件不存在。请下载3.0的证书文件，并放置在$TARGET_VERSION_PATH 目录"; exit 1; }
+[ ! -d $TARGET_VERSION_PATH  ] && { echo "请勿移动此脚本.";        exit 1; }
+
+so_conf=/etc/ld.so.conf.d/bksuite.conf
+if [ -f $so_conf ]; then
+
+    if ! grep 'common/mysql/lib' $so_conf; then
+        echo "$TARGET_VERSION_PATH/common/mysql/lib" >>$so_conf
+    fi
+
+    if ! grep 'common/zookeeper/zklib/lib' $so_conf; then
+        echo "$TARGET_VERSION_PATH/common/zookeeper/zklib/lib" >>$so_conf
+    fi
+else
+    echo "$TARGET_VERSION_PATH/common/mysql/lib" >> $so_conf
+    echo "$TARGET_VERSION_PATH/common/zookeeper/zklib/lib" >> $so_conf
+fi
+ldconfig
+
+
+[ -f utils ] && source utils
+
+sleep 2
+case $module in
+    paas) 
+        confirm_required
+
+        echo "start upgrading ..."
+        step "STEP 1: stop services "
+        for m in ${proj_list[@]}; do
+            mute $m
+        done
+
+        upgrade_db
+        step "STEP 4: upgrade modules one by one ..."
+        upgrade_job || fail "upgrade_job failed."
+        upgrade_cmdb || fail "upgrade_cmdb failed."
+        upgrade_gse || fail "upgrade_gse failed."
+        upgrade_nginx || fail "upgrade_nginx failed."
+        upgrade_license || fail "upgrade_license failed"
+        upgrade_zookeeper || fail "upgrade_zookeeper failed."
+        upgrade_paas || fail "upgrade_paas failed."
+        upgrade_saas || fail "upgrade_saas failed."
+        upgrade_monit || log -e "\n\nupgrade_monit failed\n"
+
+        step "STEP 5: starting services ...(with monit excluded)"
+        for i in redis cmdb job zookeeper nginx license paas; do
+            start $i
+        done
+
+        step "STEP 6: start up monit"
+        start monit
+        echo "paas" >>$TARGET_VERSION_PATH/.installed_module
+        paasstart_on_system_start
+        add_crontab_forpaas
+        add_envsettings
+        ;;
+    paasagent)
+        confirm_required
+
+        echo "start upgrading ..."
+        step "STEP 1: stop services "
+
+        mute nginx
+        mute rabbitmq
+
+        #[ -d /data/paas/env.bak ] && rsync -a /data/paas/env.bak/ /data/paas/env/
+        #for m in ${proj_list[@]}; do
+        #    mute $m
+        #done
+
+        step "STEP 4: upgrade modules one by one ... (with monit excluded)"
+
+        source $TARGET_VERSION_PATH/bk.conf
+        source $TARGET_VERSION_PATH/env_var_definitions.sh
+
+        paas_srcdir=$TARGET_VERSION_PATH/paas_ce
+        upgrade_paasagent ${paas_srcdir##*/}/paas_agent
+        upgrade_rabbitmq
+
+        if [ "$PAAS_IP" != "$INNERIP" ]; then
+            upgrade_nginx
+            #upgrade_monit
+        fi
+
+        for p in nginx paasagent rabbitmq; do
+            [ $p == "paasagent" ] && x="bk_paas_agent" || x=$p
+
+            if ! ps -ef | grep $x | grep -v grep; then
+                    start $p
+            else
+                $TARGET_VERSION_PATH/paas/env/bin/supervisorctl -c \
+                    /data/paas/paasagent/etc/supervisord.conf shutdown
+                start $p
+            fi
+        done
+
+        step "STEP 6: activate services ..."
+        # activate new rabbitmq
+
+        log "activate rabbitmq by: http://$PAAS_DNS_PREFIX.$BASE_DNS:$NGINX_PORT/v1/rabbitmq/init/"
+        curl -o activate.rbtmq.tmp --connect-timeout 10 \
+             -H 'Content-Type:application/x-www-form-urlencoded' \
+             -X POST \
+             -d "mq_ip=$INNERIP&username=$MQ_USER&password=$MQ_PWD" \
+             "http://$PAAS_DNS_PREFIX.$BASE_DNS:$NGINX_PORT/v1/rabbitmq/init/"
+
+        if grep 'mq_ip' activate.rbtmq.tmp; then
+            log "activate rabbitmq done"
+        else
+            log "activate rabbitmq failed."
+        fi
+
+        log "activate agent status by request url: http://$PAAS_DNS_PREFIX.$BASE_DNS:$NGINX_PORT/v1/agent/init/?agent_ip=$INNERIP"
+        curl -o activate.agent.tmp \
+            --connect-timeout 10 \
+            -X GET "http://$PAAS_DNS_PREFIX.$BASE_DNS:$NGINX_PORT/v1/agent/init/?agent_ip=$INNERIP"
+
+        cat activate.agent.tmp
+        echo
+        if ! grep -q agent_ip activate.agent.tmp; then
+            log "activate paasagent failed. please check"
+            exit 0
+        fi
+
+        echo "paasagent" >>$TARGET_VERSION_PATH/.installed_module
+        log "Ok: activate paasagent successful"
+
+        paasagentstart_on_system_start
+        add_crontab_forpaasagent
+        add_envsettings
+        ;;
+    *)
+        echo "unkown module $module"
+        usage
+        ;;
+esac

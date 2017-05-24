@@ -1,0 +1,59 @@
+#!/bin/bash
+
+cd ${BASH_SOURCE%/*} 2>/dev/null
+TARGET_VERSION_PATH=${PWD}
+
+source commmon/function
+source upgrade/utils
+
+paas_service_list=(license zookeeper mysql redis nginx cmdb job gse bkarchive monit)
+paasagent_service_list=(paasagent rabbitmq nginx)
+datasvr_service_list=(beanstalkd)
+
+cd $TARGET_VERSION_PATH
+if [ -f .installed_module ]; then
+    for i in $(cat .installed_module); do
+        case $i in
+            paas)
+                for i in  ${paas_service_list[@]}; do
+                    start $i $TARGET_VERSION_PATH
+                done
+
+                # 启动 supervisord
+                $TARGET_VERSION_PATH/paas/env/bin/supervisord -c \
+                    $TARGET_VERSION_PATH/paas/open_paas/bin/supervisord.conf
+                $TARGET_VERSION_PATH/paas/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/open_paas/bin/supervisord.conf start all
+
+                # 查看状态
+                $TARGET_VERSION_PATH/paas/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/open_paas/bin/supervisord.conf status
+            ;;
+            paasagent)
+                #$DIR_HOME/paas/paas_agent/env/bin/supervisorctl -c $DIR_HOME/paas/paas_agent/paasagent/etc/supervisord.conf start all
+                start rabbitmq
+
+                if ! ps -ef | grep nginx | grep -vq grep; then
+                    start nginx
+                fi
+
+                # 启动 supervisord
+                $TARGET_VERSION_PATH/paas/env/bin/supervisord -c \
+                    $TARGET_VERSION_PATH/paas/open_paas/bin/supervisord.conf
+                $TARGET_VERSION_PATH/paas/paas_agent/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/paas_agent/etc/supervisord.conf start all
+
+                # 查看状态
+                $TARGET_VERSION_PATH/paas/paas_agent/env/bin/supervisorctl -c \
+                    $TARGET_VERSION_PATH/paas/paas_agent/etc/supervisord.conf status
+            ;;
+            datasvr)
+                # 启动 supervisord
+                common/python/bin/supervisord -c datasvr/bk_conf/common/supervisord.conf
+                common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf start all
+                # 查看状态
+                common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf status
+            ;;
+        esac
+    done
+fi

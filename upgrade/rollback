@@ -1,0 +1,94 @@
+#!/bin/bash
+
+usage () {
+    echo "USAGE:"
+    echo "  ${BASH_SOURCE##*/} VERSION_PATH { paas | module }"
+    echo ""
+    echo " VERSION_PATH  absolute path of dione-suite 2.x, usually at /data/seies-v2.0.1"
+    echo ""
+
+    exit 0
+}
+
+[ $# -ne 2 ] && usage
+
+cd ${BASH_SOURCE%/*} 2>/dev/null
+[ -f utils ] && source utils
+
+export $NEW_VERSION_PATH=${PWD%/upgrade*}
+export $OLD_VERSION_PATH=${1}
+source $NEW_VERSION_PATH/bk.conf
+module=$2
+
+read -p "
+    rollback manager 1.0
+    --------------------
+This program used to downgrade bksuite to version 2.x
+please make sure you ever had the right version installed
+
+after rollback, you can not access apps only in 3.x, such as
+monitor, logsearch. but data in new version of bksuite will still keep
+on disk. you can remove them manually by remove the whole path
+of new version.
+
+continue? y/n [n]" reply
+
+if [ "$reply" -ne "y" ]; then
+    exit 0
+fi
+
+
+
+if [ -d $OLD_VERSION_PATH ]; then
+    echo "directory $OLD_VERSION_PATH does not exists."
+    exit 1
+fi
+
+if [ -d /data/paas/env.bak ]; then
+    echo "directory /data/paas/env.bak does not exists."
+    exit 1
+else
+    step "rollback paas env dir"
+    rsync -a /data/paas/env.bak/ /data/paas/env/
+fi
+
+paas_service=(monit zookeeper redis mysql gse cmdb job bkarchive nginx license paas)
+paasagent_service=(monit nginx paasagent rabbitmq)
+
+mute rabbitmq $NEW_VERSION_PATH
+mute paasagent $NEW_VERSION_PATH
+
+case $module in
+    paas)   step "stop current services"
+            for svs in ${paas_service[@]:0:${#paas_service[@]}-1}; do
+                mute $svs $NEW_VERSION_PATH
+            done
+            $NEW_VERSION_PATH/paas/open_paas/bin/dashboard.sh shutdown
+
+            step "start old version services"
+            for svs in ${paas_service[@]:0:${#paas_service[@]}-1}; do
+                start $svs $OLD_VERSION_PATH
+            done
+
+            /data/paas/open_paas/bin/dashboard.sh start all
+            ;;
+    paasagent)
+            step "stop current services"
+            $NEW_VERSION_PATH/paas/paas_agent/paasagent/bin/dashboard.sh shutdown
+            $NEW_VERSION_PATH/paas/service/rabbitmq/sbin/rabbitmqctl stop_app
+            $NEW_VERSION_PATH/paas/service/rabbitmq/sbin/rabbitmqctl stop
+            /usr/local/bin/epmd -kill
+            
+            step "start old version services"
+            /data/paas/service/rabbitmq/sbin/rabbitmq-server -detached; sleep 10
+            $target/paas/service/rabbitmq/sbin/rabbitmqctl start_app; sleep 5
+            /data/paas/paasagent/bin/dashboard.sh start all
+
+            if [ "$PAAS_IP" != "$INNERIP" ]; then
+                $OLD_VERSION_PATH/common/nginx/sbin/nginx.sh start   
+                $OLD_VERSION_PATH/common/monit/bin/monit -c \
+                    $OLD_VERSION_PATH/common/monit/conf/monitrc quit
+            fi
+            ;;
+    *)  usage ;;
+esac

@@ -1,0 +1,781 @@
+# vim:ft=sh
+
+print_env () {
+    echo "---- signal caught to quit at:-----"
+    echo "  current directory: $(pwd)"
+    echo "  old directory: $(OLDPWD)"
+    echo "  function call stacks: ${FUNCNAME[@]}"
+    echo "ENVIRONMENT VARIABLES:"
+    echo "$(set | grep -E '^[^ \t]+=' | grep -vE '(\-\-|_xspecs|LS_COLORS|MAIL|BASH_|HIST|XDG_|TERM|PS1|PS2|PS3|PS4|LOGNAME|COLUMNS|COMP_|colors|_backup_glob)')"
+
+    exit 3
+}
+
+log () {
+    TS=$(date +%F\ %T)
+    log_file_name=${logfile:-/tmp/bksuite.log}
+
+    if [ "$1" == "-n" ]; then
+        echoopt="-ne"
+        shift 1
+    else
+        echoopt="-e"
+    fi
+
+    echo $echoopt "${BASH_SOURCE##*/}|$BASH_LINENO|$(sed "s/ /->/g" <<<${FUNCNAME[@]}) $@"
+    echo -e "${BASH_SOURCE##*/}|$BASH_LINENO|$(sed "s/ /->/g" <<<${FUNCNAME[@]}) $@" >> $log_file_name
+
+    return 0
+}
+
+ok () {
+    log "$@"
+    exit 0
+}
+
+error () {
+    echo "$@"
+    return 1
+}
+
+fail () {
+    log "$@"
+    echo "quit."
+    exit ${2:-100}
+}
+
+warn () {
+    echo
+}
+
+step () {
+    echo -e "\033[1;42;31m$*\033[0m"
+}
+
+mute () {
+    local target=${2:-${SOURCE_VERSION_PATH}}
+
+    # shutdown services
+    log "stop ${1} ..."
+    case $1 in
+        gse) # stop gse modules one by one
+            bash $target/gse/yydba/gsedba/quit.sh >/dev/null
+            bash $target/gse/gsedba/quit.sh >/dev/null
+            bash $target/gse/gsetask/quit.sh >/dev/null
+            bash $target/gse/gsedata/quit.sh >/dev/null
+            bash $target/gse/gseapiserver/quit.sh >/dev/null
+            bash $target/gse/gsebtfilesserver/quit.sh >/dev/null
+            bash /usr/local/gse/gseagent/quit.sh >/dev/null
+            ;;
+        paas)
+            /data/paas/env/bin/supervisorctl -c /data/paas/open_paas/bin/supervisord.conf shutdown
+            ;;
+        paasagent)
+            /data/paas/env/bin/supervisorctl -c /data/paas/paasagent/etc/supervisord.conf shutdown
+            ;;
+        job)   bash $target/job/job.sh stop ;;
+        cmdb)  bash $target/common/php/php-fpm.sh stop ;;
+        mysql) bash $target/common/mysql/mysqld.sh stop ;;
+        nginx) bash $target/common/nginx/sbin/nginx.sh stop ;;
+        redis) bash $target/common/redis/redis-server.sh stop ;;
+        monit) chmod 700 $target/common/monit/conf/*rc
+               $target/common/monit/bin/monit -c \
+                    $target/common/monit/conf/monitrc quit ;;
+        bkarhive) bash $target/common/gitserver/stop.sh ;;
+        rabbitmq)
+            [ -z "$2" ] && target=/data
+            $target/paas/service/rabbitmq/sbin/rabbitmqctl stop_app
+            $target/paas/service/rabbitmq/sbin/rabbitmqctl stop
+            /usr/local/bin/epmd -kill
+            ;;
+        zookeeper) 
+            bash $target/common/zookeeper/script/zk1 stop
+            bash $target/common/zookeeper/script/zk2 stop
+            bash $target/common/zookeeper/script/zk3 stop
+            ;;
+        license) bash $target/license/license.sh stop ;;
+    esac
+
+    retval=$?
+    [ $? -eq 0 ] && log "stop $1 Done" || log "stop $1 Failed"
+    return $retval
+}
+
+start () {
+    local target=${2:-${TARGET_VERSION_PATH}}
+
+    log "start $1 ..."
+    case $1 in
+        gse) # stop gse modules one by one
+            $target/gse/yydba/gsedba/start.sh >/dev/null
+            $target/gse/gsedba/start.sh >/dev/null
+            $target/gse/gsetask/start.sh >/dev/null
+            $target/gse/gsedata/start.sh >/dev/null
+            $target/gse/gseapiserver/start.sh >/dev/null
+            $target/gse/gsebtfilesserver/start.sh >/dev/null
+            /usr/local/gse/gseagent/start.sh >/dev/null
+            ;;
+        paas|paasagent)
+            [ "$1" == "paas" ] && x=open_paas || x=paas_agent/paasagent
+            # shutdown open_paas program and supervisord itself
+            bash $target/paas/$x/bin/dashboard.sh start all
+            ;;
+        job)   bash $target/job/job.sh start ;;
+        cmdb)  bash $target/common/php/php-fpm.sh start ;;
+        mysql) bash $target/common/mysql/mysqld.sh start ;;
+        nginx) bash $target/common/nginx/sbin/nginx.sh start ;;
+        redis) bash $target/common/redis/redis-server.sh start ;;
+        monit) $target/common/monit/bin/monit \
+                -c $target/common/monit/conf/monitrc ;;
+        bkarhive) bash $target/common/gitserver/start.sh ;;
+        rabbitmq) 
+            $target/paas/service/rabbitmq/sbin/rabbitmq-server -detached; sleep 10
+            $target/paas/service/rabbitmq/sbin/rabbitmqctl start_app; sleep 5
+            ;;
+        zookeeper) 
+            bash $target/common/zookeeper/script/zk1 start
+            bash $target/common/zookeeper/script/zk2 start
+            bash $target/common/zookeeper/script/zk3 start
+            ;;
+        license) bash $target/license/license.sh start ;;
+    esac
+
+    retval=$?
+    [ $? -eq 0 ] && log "start $1 Done" || log "start $1 Failed"
+    return $retval
+}
+
+upgrade_nginx () {
+    render_cfg_template common/nginx
+}
+
+upgrade_license () {
+    update_certificate $SSL_CERTIFICATE_FILE license
+}
+
+upgrade_zookeeper () {
+    log "copy zookeeper data to new path"
+    rsync -a $SOURCE_VERSION_PATH/common/zookeeper/server* $TARGET_VERSION_PATH/common/zookeeper/
+
+    log "update zookeeper configuratiosn."
+    render_cfg_template common/zookeeper
+}
+
+upgrade_gse () {
+    update_certificate $SSL_CERTIFICATE_FILE gse
+    render_cfg_template gse
+
+    # update gse agent to /usr/local/gse
+    [ -d /usr/local/gse/gseagent ] && rm -rf /usr/local/gse/gseagent
+
+    rsync -a $TARGET_VERSION_PATH/gse/gseagent /usr/local/gse/
+
+    # pack gseagent for new agent installation
+    apppkg_dir=$TARGET_VERSION_PATH/index/download/app
+    manual_dir=$TARGET_VERSION_PATH/index/download/direct
+
+    log "make a new packge of gse for continuous installation"
+    log " - packing for agent install inside app(bk_agent_setup)"
+    cd $apppkg_dir; bash ./pkg.sh
+    log " - packing for manual install agent"
+    cd $manual_dir; bash ./pkg.sh 
+    # start gse
+    # summary gse
+}
+
+upgrade_job () {
+    local alter_sql
+
+    alter_sql=$(find $TARGET_VERSION_PATH/job -name "2.0-3.*.sql")
+
+    update_certificate $SSL_CERTIFICATE_FILE job
+    render_cfg_template job
+
+    # make changes to database 
+    log "upgrade db for job"
+    source $TARGET_VERSION_PATH/common/function
+    mysqlcmd="$TARGET_VERSION_PATH/common/mysql/bin/mysql -h$DB_HOST -u$DB_USER -p$DB_PASSWD -P$DB_PORT"
+    $mysqlcmd job <"${alter_sql}"
+
+    return $?
+}
+
+upgrade_cmdb () {
+    update_certificate $SSL_CERTIFICATE_FILE cmdb
+    render_cfg_template cmdb
+
+    # dir permissions
+    upload_dir=$TARGET_VERSION_PATH/cmdb/cc_openSource/application/resource/upload
+    chmod 777 $upload_dir/importPrivateHostByExcel
+
+    [ -d $TARGET_VERSION_PATH/.session ] || mkdir -p $TARGET_VERSION_PATH/.session
+    chown cmdb.cmdb $TARGET_VERSION_PATH/.session
+
+    # init data
+    cd $TARGET_VERSION_PATH/cmdb/cc_openSource
+    log "perform migrate database"
+    $TARGET_VERSION_PATH/common/php/bin/php index.php /cli/Init/initUserData
+    log "add blueking to biz list"
+    $TARGET_VERSION_PATH/common/php/bin/php index.php /cli/Init/addBkApp
+
+    return $?
+}
+
+upgrade_rabbitmq () {
+    local rabbitmq_newhome=$TARGET_VERSION_PATH/paas/service/rabbitmq
+    local rabbitmq_home=/data/paas/service/rabbitmq
+    mkdir -p $rabbitmq_newhome
+
+    if [ -d $rabbitmq_home ]; then
+        rsync -a $rabbitmq_home/ $rabbitmq_newhome/
+
+        # update rabbitmq env file
+        local rabbitmq_envfile=$rabbitmq_newhome/etc/rabbitmq/rabbitmq-env.conf
+        echo "CONFIG_FILE=$rabbitmq_newhome/etc/rabbitmq" > $rabbitmq_envfile
+        echo "MNESIA_BASE=$rabbitmq_newhome/var/lib/mnesia" >> $rabbitmq_envfile
+        echo "LOG_BASE=$rabbitmq_newhome/var/log" >>$rabbitmq_envfile
+        echo "ENABLED_PLUGINS_FILE=$rabbitmq_newhome/etc/enabled_plugins" >>$rabbitmq_envfile
+
+        return $?
+    else
+        log "$rabbitmq_newhome does not exists. perhaps you've had it installed on another hosts"
+        return 1
+    fi
+}
+
+upgrade_paas () {
+    log "render config file"
+    render_cfg_template common
+    render_cfg_template index
+    render_cfg_template init_data
+
+    # backup 
+    [ ! -d /data/paas/env.bak ] && rsync -a /data/paas/env/ /data/paas/env.bak/
+
+    render_cfg_template "paas_ce"
+
+    (
+        cd $TARGET_VERSION_PATH/paas_ce/open_paas/bin
+        # get db settings
+        source config.sh
+        log "  exec paas setup.sh"
+        mkdir -p $SSL_ROOT_DIR
+        ./setup.sh -p $TARGET_VERSION_PATH/paas
+    )
+
+    if [ $? -ne 0 ]; then
+        log " install paas failed."
+        exit 5
+    fi
+
+    log "update certificates for paas"
+    update_certificate $SSL_CERTIFICATE_FILE paas
+    render_cfg_template paas
+
+    # update nginx configurations
+    log "update nginx config"
+    paas_ngx_conf=$TARGET_VERSION_PATH/paas/open_paas/bin/tpls/samples/nginx/paas.conf
+    cp $paas_ngx_conf $TARGET_VERSION_PATH/common/nginx/nginx_conf/
+}
+
+upgrade_paasagent () {
+    local paasagent_srcdir=$1
+    local paasagent_target=$TARGET_VERSION_PATH/paas/paas_agent
+
+    # backup 
+    [ ! -d /data/paas/env.bak ] && rsync -a /data/paas/env/ /data/paas/env.bak/
+    target_paasagent_config=$paasagent_target/paasagent/etc/paas_agent_config.yaml
+    source_paasagent_config=/data/paas/paasagent/etc/paas_agent_config.yaml
+
+    render_cfg_template "paas_ce/paas_agent"
+
+    # perform setup
+    log "  exec paasagent setup.sh"
+    (
+        cd $TARGET_VERSION_PATH/$paasagent_srcdir
+        ./bin/setup.sh -p $paasagent_target
+    )
+
+    # reuse paas_agent_config.yaml.
+    log "  recover paas_agent_config.yml"
+    rsync -a ${target_paasagent_config}_sample $target_paasagent_config
+
+    # recover sid and token
+    SID=$(grep -Po '(?<=sid: )([^,]+)' $source_paasagent_config)
+    TOKEN=$(grep -Po '(?<=token: )([^,]+)' $source_paasagent_config)
+
+    log "update sid/token to paas_agent_config.yaml"
+    sed -i "s,sid:.*,sid: $SID,
+            s,token:.*,token: $TOKEN,
+            s,CERTIFICATE_SERVER_URL:.*,CERTIFICATE_SERVER_URL: 'https://$PAAS_DNS_PREFIX.$BASE_DNS:443/certificate',
+            s,CONTROLLER_SERVER_URL:.*,CONTROLLER_SERVER_URL: 'http://$PAAS_DNS_PREFIX.$BASE_DNS:80'," $target_paasagent_config
+
+    log "update certificates for paasagent"
+
+    update_certificate $SSL_CERTIFICATE_FILE paasagent
+
+    log "render config templates"
+    render_cfg_template paas
+
+    # update nginx configuration
+    log "update nginx config file"
+    paasagent_ngx_conf=$paasagent_target/paasagent/etc/nginx/paasagent.conf
+    cp -f $paasagent_ngx_conf $TARGET_VERSION_PATH/common/nginx/nginx_conf/
+
+    $paasagent_target/env/bin/supervisorctl -c $paasagent_target/paasagent/etc/supervisord.conf restart all
+    $TARGET_VERSION_PATH/common/nginx/sbin/nginx \
+        -c $TARGET_VERSION_PATH/common/nginx/conf/nginx.conf \
+        -p $TARGET_VERSION_PATH/common/nginx -s reload
+}
+
+upgrade_monit () {
+    log "going to update monit"
+
+    if grep -i 'centos' /etc/*-release; then
+        # install monit from yum repo
+        log "install monit  from yum repo"
+        yum -y install monit
+
+        if [ ! -f /usr/bin/monit ]; then
+            rpm -ivh $TARGET_VERSION_PATH/epel-*.rpm
+            yum -y install monit
+            /usr/bin/monit quit
+        fi
+        
+        log "replace monit with the system one"
+        rsync -a /usr/bin/monit $TARGET_VERSION_PATH/common/monit/bin/
+    fi
+
+    render_cfg_template common/monit
+    chmod 600 $TARGET_VERSION_PATH/common/monit/conf/*
+
+    rm -f $TARGET_VERSION_PATH/common/monit/lib/*
+}
+
+summary () {
+    # make a summary for modules, output the following info
+    #	version
+    #	project path
+    #	log info
+    #	requirements
+    #	shortcuts
+    local module="$1"
+    case module in
+        gse) : ;;
+    esac
+}
+
+_backup_redis () {
+    local rdhome=$1
+    local conf=$2
+    local backup_dir=$3
+
+    [ ! -d $backup_dir ] && mkdir -p $backup_dir
+
+    # get redis settings
+    log " query redis config info"
+    redis_datadir=$(awk '/^dir/ {print $2}' $conf)
+    dbfile=$(awk '/^dbfilename/ {print $2}' $conf)
+    rdhost=$(awk '/^bind/ {print $2}' $conf)
+    rdport=$(awk '/^port/ {print $2}' $conf)
+    rdpass=$(awk '/^requirepass/ {print $2}' $conf)
+    pmode=$(awk '/^appendonly/ {print $2}' $conf)
+
+    # dump all memory data to disk use redis bgsave
+    $rdhome/bin/redis-cli -p $rdport -h $rdhost -a "$rdpass" bgsave
+
+    if [ $? -ne 0 ]; then
+        log "  execute bgsave in redis failed"
+        exit 2
+    fi
+
+    ## wait for redis bgsave to get done
+    while :; do
+        log "waitting for redis bgsave ..."
+        x=$(echo "info Persistence" | $rdhome/bin/redis-cli -p $rdport -h $rdhost -a "$rdpass" | \
+            grep -Ec "rdb_bgsave_in_progress:0|rdb_last_bgsave_status:ok")
+
+        if [ "$x" == 2 ]; then
+            log " ... redis bgsave is done"
+            break
+        fi
+
+        sleep 1
+    done
+
+    if [ "$pmode" == "yes" ]; then
+        # aof has some file
+        aof_file=$(awk '/appendfilename/ {print $2}' $conf)
+        rsync -a $redis_datadir/$dbfile $redis_datadir/$aof_file $backup_dir/
+    else
+        rsync -a $redis_datadir/$dbfile $backup_dir/
+    fi
+}
+
+_backup_mysql () {
+    local mysql_home=$1
+    local mysql_conf=$2
+    local backup_dir=$3
+
+    [ ! -d $backup_dir ] && mkdir -p $backup_dir
+
+    my_port=$(awk '/^port/ { print $NF; exit; }' $mysql_conf)
+    my_sokt=$(awk '/^socket/ { print $NF; exit }' $mysql_conf)
+    my_host=$(awk '/^bind-address/ { print $NF; exit }' $mysql_conf)
+
+    # backup all database and data with create option
+    log "backing up mysql db, with create-table option"
+
+    source $SOURCE_VERSION_PATH/common/function  # load mysql paasowd
+    $mysql_home/bin/mysqldump -h $my_host -u $DB_USER -p$DB_PASSWD -P $my_port \
+        --opt \
+        --default-character=utf8 \
+        --all-databases >$backup_dir/bkv2.0.sql
+    return $?
+}
+
+upgrade_saas () {
+    # start background of new added SaaS application
+    render_cfg_template common/gitserver
+    start bkarhive
+
+    # migrate deployed saas app to new version
+    add_white_list
+}
+
+add_white_list () {
+    app_code=${1:-bk_cdman}
+    bkdata_api_conf=$TARGET_VERSION_PATH/datasvr/bk_conf/bkdata/bk_bkdata_api.conf
+    bkdata_monitor_conf=$TARGET_VERSION_PATH/datasvr/bk_conf/bkdata/bk_bkdata_monitor.conf
+    cmd="$TARGET_VERSION_PATH/common/mysql/bin/mysql -u root --socket $TARGET_VERSION_PATH/common/mysql/data/mysql.sock"
+
+    echo "add whitelist for '$app_code' to esb_function_controller"
+    exists=$($cmd -e "use open_paas; select wlist from esb_function_controller where wlist like '%$app_code%'" | tail -n +2)
+
+    if [ "$exists" == "" ]; then
+        $cmd -e "use open_paas;update esb_function_controller set wlist = concat(wlist, ',$app_code') where func_code='user_auth::skip_user_auth';"
+    fi
+}
+
+_restore_redis () {
+    local rdhome=$1
+    local conf=$2
+    local backup_dir=$3
+
+    log "render redis configuration file"
+    render_cfg_template common/redis
+    # get redis settings
+    redis_datadir=$(awk '/^dir/ {print $2}' $conf)
+    dbfile=$(awk '/^dbfilename/ {print $2}' $conf)
+    rdhost=$(awk '/^bind/ {print $2}' $conf)
+    rdport=$(awk '/^port/ {print $2}' $conf)
+    rdpass=$(awk '/^requirepass/ {print $2}' $conf)
+    pmode=$(awk '/^appendonly/ {print $2}' $conf)
+
+    redis_cli="$rdhome/bin/redis-cli -p $rdport -h $rdhost -a '$rdpass'"
+    log "copy data file to new redis data dir"
+    rsync -a $backup_dir/* $redis_datadir
+
+    if [ "$pmode" == "yes" ]; then
+        # disable appendonly mode first
+        log "redis persistence mode is aof, disable it first"
+        sed -i "/^appendonly/s/yes/no/" $conf
+
+        # start redis
+        log "start redis and restore data ..."
+        start redis
+        $redis_cli BGREWRITEAOF
+        while :; do
+            log " + wait for bgwriteaof to get done ..."
+            if $redis_cli info Persistence | grep aof_rewrite_in_progress:0; then
+                log " + restore aof data done"
+                break
+            fi
+            sleep 1
+        done
+
+        log "data resotre. going to re-enable appendonly mode"
+        log " + stop redis first"
+        $rdhome/redis-server.sh stop
+        log " + update appendonly to yes"
+        sed -i "/^appendonly/s/no/yes/" $conf
+    fi
+
+    log "start redis ..."
+    start redis
+}
+
+_restore_mysql () {
+    local mysql_home=$1
+    local mysql_conf=$2
+    local backup_sql=$3
+
+    log "render mysql configuration file"
+    render_cfg_template common
+
+    my_port=$(awk '/^port/ { print $NF; exit; }' $mysql_conf)
+    my_sokt=$(awk '/^socket/ { print $NF; exit }' $mysql_conf)
+    my_host=$(awk '/^bind-address/ { print $NF; exit }' $mysql_conf)
+
+    mysqlcli="$mysql_home/bin/mysql --default-character=utf8 --socket $my_sokt"
+    log "start restore mysql: $mysqlcli <$backup_sql"
+    $mysqlcli <$backup_sql
+    [ $? -ne 0 ] && return 3
+
+    source $TARGET_VERSION_PATH/common/function
+    log "grant mysql privileges: grant all privileges on *.* to '$DB_USER'@'%' identified by '$DB_PASSWD'; flush privileges;"
+    $mysqlcli -e "grant all privileges on *.* to '$DB_USER'@'%' identified by '$DB_PASSWD'; flush privileges;"
+}
+
+# generate configuration files
+render_cfg_template () {
+    # usage:
+    # render_cfg_template target_module
+    module=$1
+    prefix=${TARGET_VERSION_PATH%/}
+
+    source ${prefix}/bk.conf
+    source ${prefix}/env_var_definitions.sh
+    source ${prefix}/common/function
+    BKROOT=${prefix%/}
+
+    for template in $(find $prefix/$module -name "*.tpl"); do
+        corresponding_file=${template%%.tpl}
+
+        # generate new config file
+        sed "s,__BKROOT__,$BKROOT,g
+             s,__INNERIP__,$INNERIP,g
+             s,__OUTERIP__,$OUTERIP,g
+             s,__PAAS_IP__,$PAAS_IP,g
+             s,__MYSQL_IP__,$PAAS_IP,g
+             s,__CERTS_IP__,$PAAS_IP,g
+             s,__DATASVR_IP__,$DATASVR_IP,g
+             s,__ZK_IP__,$PAAS_IP,g
+             s,__NGINX_PORT__,$NGINX_PORT,g
+             s,__DB_PASSWD__,$DB_PASSWD,g
+             s,__DB_USER__,$DB_USER,g
+             s,__DB_PORT__,$DB_PORT,g
+             s,__BASE_DNS__,$BASE_DNS,g
+             s,__PAAS_DNS__,$PAAS_DNS_PREFIX.$BASE_DNS,g
+             s,__CMDB_DNS__,$CMDB_DNS_PREFIX.$BASE_DNS,g
+             s,__JOB_DNS__,$JOB_DNS_PREFIX.$BASE_DNS,g
+             s,__PAASAGENT_MODE__,$PAASAGENT_MODE,g
+             s,__PAASAGENT_TESTIP__,$PAASAGENT_TESTIP,g
+             s,__PAASAGENT_PRODIP__,$PAASAGENT_PRODIP,g
+             s,__PAAS_DNS_PREFIX__,$PAAS_DNS_PREFIX,g
+             s,__CMDB_DNS_PREFIX__,$CMDB_DNS_PREFIX,g
+             s,__JOB_DNS_PREFIX__,$JOB_DNS_PREFIX,g
+             s,__ES_DATA__,$ES_DATA,g
+             s,__ES_LOG__,$ES_LOG,g" $template >$corresponding_file
+        
+        if [ ${corresponding_file%monitrc*} == "${corresponding_file}" ]; then
+            chmod +x ${corresponding_file}
+        else
+            chmod 600 ${corresponding_file}
+        fi
+    done
+
+}
+
+update_certificate () {
+    local cert_file=$1
+    local module=$2	    #
+    local prefix=${TARGET_VERSION_PATH%/}	    # install path
+
+    case ${module%/} in
+        gse) _update_gse_cert $prefix/$module $cert_file ;;
+        job) _update_job_cert ;;
+        paas) _update_paas_cert $prefix/$module $cert_file ;;
+        cmdb) _update_cmdb_cert $prefix/$module $cert_file ;;
+        paasagent) _update_paasagent_cert $prefix/paas $cert_file ;;
+        license) _update_license_cert ;;
+        *) echo "unkown module name, please check" ;;
+    esac
+}
+
+_update_license_cert () {
+    tar xf $SSL_CERTIFICATE_FILE -C $TARGET_VERSION_PATH/license/conf
+}
+
+_update_gse_cert () {
+    local prefix=$1
+    local cert_file=$2
+
+    for p in $(find $prefix -type d -name crt); do
+        echo "updating certificates files under ${p}..."
+        tar xvf $cert_file -C $p
+        (( ret += $? ))
+    done
+}
+
+_update_paas_cert () {
+    local prefix=$1
+    local cert_file=$2
+    source $prefix/open_paas/bin/config.sh
+    tar xvf $cert_file -C $SSL_ROOT_DIR
+
+    return $?
+}
+
+_update_paasagent_cert () {
+    local prefix=${1}
+    local cert_file=${2}
+    tar xvf $cert_file -C $prefix/paas_agent/paasagent/etc
+
+    return $?
+}
+
+_update_job_cert () {
+    local prefix=$TARGET_VERSION_PATH/job/certs
+    local bkroot=$TARGET_VERSION_PATH
+
+    (
+        export PATH=$bkroot/common/java/bin:$PATH
+        cd $prefix
+        # uncompress ssl to current dir
+        tar xf $SSL_CERTIFICATE_FILE
+
+        keytool \
+            -importkeystore -v \
+            -srcstoretype pkcs12 \
+            -deststoretype jks \
+            -noprompt \
+            -srckeystore gse_job_api_client.p12 \
+            -destkeystore gse_job_api_client.keystore \
+            -srcstorepass 2y#8VI2B4Sm9Dk^J \
+            -deststorepass 2y#8VI2B4Sm9Dk^J
+
+        keytool \
+            -importkeystore -v \
+            -srcstoretype pkcs12 \
+            -deststoretype jks \
+            -noprompt \
+            -srckeystore job_server.p12 \
+            -destkeystore job_server.keystore \
+            -srcstorepass mLnuob1**4D74c@F \
+            -deststorepass mLnuob1**4D74c@F
+
+        keytool \
+            -keystore gse_job_api_client.truststore \
+            -alias ca \
+            -import \
+            -trustcacerts \
+            -file gseca.crt \
+            -storepass 2y#8VI2B4Sm9Dk^J \
+            -noprompt
+
+        keytool \
+            -keystore job_server.truststore \
+            -alias ca \
+            -import \
+            -trustcacerts \
+            -file job_ca.crt \
+            -storepass mLnuob1**4D74c@F \
+            -noprompt
+
+        # remove certificate source file
+        rm -f gse_job_api_client.p12 job_server.p12
+
+        rsync -a platform.cert $TARGET_VERSION_PATH/job/apache-tomcat-7.0.19/webapps/ROOT/WEB-INF/classes/
+    )
+
+}
+
+_update_cmdb_cert () {
+    echo "certificate is not required by cmdb... skip."
+    return 0
+}
+
+add_crontab_forpaas () {
+    crontmp=$(mktemp /tmp/crontab.XXXXXX)
+    crontab -l | grep -Ev '(watch_monit|watch_supvs open_paas)' > $crontmp
+    cat >> $crontmp <<_OO_
+
+*/3 * * * * cd $TARGET_VERSION_PATH; ./common/watch_monit
+*/3 * * * * cd $TARGET_VERSION_PATH; ./common/watch_supvs open_paas
+_OO_
+
+    crontab $crontmp
+}
+
+add_crontab_forpaasagent () {
+    crontmp=$(mktemp /tmp/crontab.XXXXXX)
+    crontab -l | grep -Ev "watch_supvs paas_agent" > $crontmp
+    echo "*/3 * * * * cd $TARGET_VERSION_PATH; ./common/watch_supvs paas_agent" >> $crontmp
+}
+
+paasstart_on_system_start () {
+    local tag_file=$TARGET_VERSION_PATH/.installed_module
+
+    if ! grep 'bkrc.local' /etc/rc.local; then
+        echo "[ -f /etc/bkrc.local ] && bash /etc/bkrc.local"  >>/etc/rc.local
+    fi
+
+    if [ -f $tag_file ]; then
+        if grep '^paas$' $tag_file; then
+            log "paas installed on this machine, add start script to bkrc.local"
+            echo "export TARGET_VERSION_PATH=$TARGET_VERSION_PATH"      >>/etc/bkrc.local
+            echo 'source $TARGET_VERSION_PATH/upgrade/utils'            >>/etc/bkrc.local
+            echo "modules=(mysql redis license zookeeper job cmdb nginx paas gse bkarchive)" >>/etc/bkrc.local
+            echo 'for m in ${modules[@]}; do'   >>/etc/bkrc.local
+            echo '    start $m' >>/etc/bkrc.local
+            echo 'done'         >>/etc/bkrc.local
+            echo 'start monit'  >>/etc/bkrc.local
+        fi
+    fi
+}
+
+paasagentstart_on_system_start () {
+    local tag_file=$TARGET_VERSION_PATH/.installed_module
+
+    if ! grep 'bkrc.local' /etc/rc.local; then
+        echo "[ -f /etc/bkrc.local ] && bash /etc/bkrc.local"  >>/etc/rc.local
+    fi
+
+    if [ -f $tag_file ]; then
+        if grep '^paasagent$' $tag_file; then
+            if grep "^paas$" $tag_file; then
+                echo ""                 >>/etc/bkrc.local
+                echo "start paasagent"  >>/etc/bkrc.local
+                echo 'cd $TARGET_VERSION_PATH/paas/paas_agent/paasagent/bin'        >>/etc/bkrc.local
+                echo './recover_apps.sh $TARGET_VERSION_PATH/paas/paas_agent/apps'  >>/etc/bkrc.local
+            else
+                log "paasagent installed on this machine, add start script to rc.local"
+                echo "export TARGET_VERSION_PATH=$TARGET_VERSION_PATH"  >>/etc/bkrc.local
+                echo 'source $TARGET_VERSION_PATH/upgrade/utils'        >>/etc/bkrc.local
+                echo 'start nginx'      >>/etc/bkrc.local
+                echo 'start rabbitmq'   >>/etc/bkrc.local
+                echo 'start paasagent'  >>/etc/bkrc.local
+                echo 'cd $TARGET_VERSION_PATH/paas/paas_agent/paasagent/bin'        >>/etc/bkrc.local
+                echo './recover_apps.sh $TARGET_VERSION_PATH/paas/paas_agent/apps'  >>/etc/bkrc.local
+            fi
+        fi
+    fi
+}
+
+datasvr_start_on_system_start () {
+    local tag_file=$TARGET_VERSION_PATH/.installed_module
+
+    if [ -f $tag_file ]; then
+        if grep '^bkdata' $tag_file; then
+            echo "cd $TARGET_VERSION_PATH" >> /etc/bkrc.local
+            echo "./common/python/bin/supervisord -c datasvr/bk_conf/common/supervisord.conf" >>/etc/bkrc.local
+            echo "./common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf start all" >>/etc/bkrc.local
+        fi
+    fi
+}
+
+add_envsettings () {
+    echo "export BK_HOME=$TARGET_VERSION_PATH" >$HOME/.bkrc
+    echo "export TARGET_VERSION_PATH=$TARGET_VERSION_PATH" >>$HOME/.bkrc
+
+    cat >>$HOME/.bkrc <<'_OO_'
+export PATH=$TARGET_VERSION_PATH/common/nginx/bin:$TARGET_VERSION_PATH/common/java/bin:$TARGET_VERSION_PATH/common/mysql/bin:$PATH
+export PATH=$TARGET_VERSION_PATH/common/monit/bin:$TARGET_VERSION_PATH/common/php/bin:$TARGET_VERSION_PATH/common/php/sbin:$PATH
+export PATH=$TARGET_VERSION_PATH/common/elasticsearch/bin:$TARGET_VERSION_PATH/common/redis/bin:$PATH
+if [ -f $TARGET_VERSION_PATH/upgrade/utils ]; then
+    source $TARGET_VERSION_PATH/upgrade/utils
+fi
+_OO_
+    echo "[ -f $HOME/.bkrc ] && source $HOME/.bkrc" >> $HOME/.bashrc
+}

@@ -14,7 +14,7 @@ DiOne 3.0, 分为3个模块：
 - `PaasAgent`
     - 正式环境
     - 测试环境
-- `datasvr` 
+- `datasvr`
     - `api`
     - `monitor`
     - `databus`
@@ -28,7 +28,7 @@ DiOne 3.0, 分为3个模块：
 1. `PaasAgent` 正式环境和测试环境必须分开部署。（若不需要`paasagent`测试环境, 则可以不部署)
 2. 除说明1之外，从技术上来看，3个模块可以全部部署在同一台机器上，但不建议这么做
 3. 建议机器数量及部署方式如下：
-    
+
     | 机器数量 | 部署方式 | 备注 |
     | --- | --- | --- |
     | 1 | 全部模块部署在一台机器上 | 无app测试环境 |
@@ -66,7 +66,7 @@ DiOne 3.0, 分为3个模块：
     erlang
     python
 ```
-    
+
 ### 1. 安装准备
 - 准备安装目录，建议安装在系统中较大的分区中的公共目录。<font color="red">不能安装在用户家目录下</font>
 - 下载安装包。并解压
@@ -83,7 +83,7 @@ DiOne 3.0, 分为3个模块：
 
 
         # 根域
-        BASE_DNS=bking.com
+        BASE_DNS=dione.com
         # PAAS平台的域名前缀
         PAAS_DNS_PREFIX=paas
         # 配置平台的域名前缀
@@ -106,7 +106,7 @@ DiOne 3.0, 分为3个模块：
         PAASAGENT_MODE=test
         # PAASAGENT是否独立部署：如果本机要安装PAASAGENT，则要设置该选项。如果本机要同时安装PAAS和PAASAGENT，请设置为 no，否则设置为 yes
         PAASAGENT_ONLY=yes
-        # ---------- new add ----------------
+        # ----------new add----------------
         # zookeeper的IP地址，zookeeper 与基础模板安装在同一服务器上，填写所在基础模块服务器的内网IP地址
         ZK_IP=x.x.x.x
         # mysql数据库所在服务器IP，即基础模块所在服务器的内网IP地址
@@ -124,7 +124,7 @@ DiOne 3.0, 分为3个模块：
     - `rabbitmq`
     - `tomcat`
     - `zookeeper`
- 
+
 
 - 基础模块，会安装 `cmdb`，`paas`，`job` 3个基础平台，`gse` 管控通道,  以及他们依赖的服务，**这些服务安装到同一台机器上**
 在3.0 中，沿用了2.0的做法，依次执行如下操作， 操作前请确保已正确配置 `bk.conf`：
@@ -137,7 +137,7 @@ DiOne 3.0, 分为3个模块：
     ```
 - 上述步骤操作完成之后，通过 `./bk.sh summary` 可以查看基础模块所有服务的运行状况
 
-> Note: 
+> Note:
 > 若执行`./bk.sh summary` 提示`Monit: the monit daemon is not running`, 可以通过命令手动执行启动：`./bk.sh start monit` 启动 `monit`，`5-10`分钟后，再执行`./bk.sh summary`查看状态
 
 ### 3. PaasAgent 安装
@@ -146,14 +146,14 @@ DiOne 3.0, 分为3个模块：
 - `PaasAgent`的安装类似基础模块：依次执行如下操作， 操作前请确保已正确配置 `bk.conf` ,  
     - 如果是正式环境，`bk.conf` 中的 `PAASAGENT_MODE` 设置为 `prod`.
     - 如果是测试环境，`PAASAGENT_MODE` 设置为 `test`.
-    
+
     ```bash
     $ cd bksuite-3.0.9-beta
     $ vi bk.conf    # 根据说明编辑好 bk.conf 文件
     $ ./bk.sh init paasagent
     $ ./bk.sh install paasagent
     $ ./bk.sh install rabbitmq
-    ``` 
+    ```
 
 ### 4. datasvr安装
 
@@ -172,34 +172,34 @@ DiOne 3.0, 分为3个模块：
     以上步骤中包含了安装 `Kafka` 的步骤, 并自动配置了相关的服务
     正常启动的情况下，cd 到安装目录下，通过以下命令，看到的服务，应该都是在 `RUNNING` 状态
     `common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf status`
-    
+
     > Note: datasvr 不能使用 ./bk.sh summary 来查看状态
 
 ### 5. App (SaaS应用)安装部署
 - 安装 `agent_setup app`
-     
+
      `agent安装`的安装包已经打包在完整包中，在开发者中心点击部署即可。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 找到`bk_agent_setup` 所在的行，点击部署
 
 - 安装DiOne监控`app`
     DiOne监控包含了一个纯后台的子模块，请求 `paas`接口 需要进行 `token` 认证的步骤。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传监控 `app` 的 `SaaS` 安装包，点击一键部署
     - <font color="red">4. 登陆 `datasvr` 所在机器，进入安装目录，执行脚本`./update_monitor_token.sh`</font>。
 
 - 安装日志检索`app`
-    
+
     与 App: `agent安装`不一样， 该包从 Smart 市场下载，通过上传的方式进行部署。多了一个上传步骤
-    
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传日志检索 `app` 的 `SaaS` 安装包，点击一键部署
     - 4. 日志检索 `app` 需要调用监控 `app` 后台的接口，因此<font color="red">在使用日志检索前, 确保已经按照安装监控`app`的步骤操正常安装了监控 `app`</font>
 - 安装包管理`app`
     同DiOne监控一样，包管理 app 也是一个包含后台应用子模块。需要进行 `token` 认证。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传包管理 `app` 的 `SaaS` 安装包，点击一键部署
     - <font color="metagan">4. 登陆 `datasvr` 所在机器，进入安装目录，执行脚本`./add_wlist_cdman.sh`。</font>
@@ -303,15 +303,15 @@ cd ${bksuite安装路径}/gse
         $ 启动： common/php/php-fpm.sh start
         $ 停止：common/php/php-fpm.sh stop
         ```
-    
+
 ##### job
 - `job` 平台依赖于 `tomcat`
-    
+
     ```
     $ job/job.sh start
     $ job/job.sh stop
     ```
-    
+
 ##### gitserver
 - `gitserver` 是包管理 `App` 的后台程序, 在安装 `PaaS` 的时候，会自动启动.
 
@@ -336,7 +336,7 @@ $ cd  ${INSTALL_PATH}
 ##### SaaS app
 - 内置应用的恢复
     在 app 无法访问时，可以通过这个方式进行恢复，进入安装目录执行：
-    
+
     `$ paas/paas_agent/paasagent/bin/recover_apps.sh  paas/paas_agent/apps/`
 
 #### 3. datasvr服务管理
@@ -350,7 +350,7 @@ DiOne 3.0 beta安装部署
 [TOC]
 
 ## 模块说明
-社区版3.0, 分为3个模块：
+DiOne 3.0, 分为3个模块：
 
 - 基础模块
     - `paas`
@@ -361,21 +361,21 @@ DiOne 3.0 beta安装部署
 - `PaasAgent`
     - 正式环境
     - 测试环境
-- `datasvr` 
+- `datasvr`
     - `api`
     - `monitor`
     - `databus`
 
 > <font color="red" size="6px">**重要说明**:</font>
 
-- 基于可靠性保障的原因，`3.0 beta` 版本中自带了`nginx`，`mysql`，`php` `redis` 等基础服务的软件包，安装脚本 `bk.sh` 也计划在未来的版本中丢弃，改用更友好的安装脚本。因此，`3.0 beta` 版本的安装脚本`bk.sh`与也仅限于全新安装。尽管如此，<font color="green">本文末尾提供了从`2.0`升级到`3.0 beta` 的手动操作方法, 以便老用户使用</font>
+- 因为历史原因、时间关系及基于可靠性保障的原因，`3.0 beta` 版本中仍然自带了`nginx`，`mysql`，`php` `redis` 等基础服务的软件包，安装脚本 `bk.sh` 也计划在未来的版本中丢弃，改用更友好的安装脚本。因此，与`2.0`一样，`3.0 beta` 版本的安装脚本`bk.sh`与也仅限于全新安装。尽管如此，<font color="green">本文末尾提供了从`2.0`升级到`3.0 beta` 的手动操作方法, 以便老用户使用</font>
 - <font color="red">安装前请认真阅读安装准备中的说明</font>
 
 ## 部署需求
 1. `PaasAgent` 正式环境和测试环境必须分开部署。（若不需要`paasagent`测试环境, 则可以不部署)
 2. 除说明1之外，从技术上来看，3个模块可以全部部署在同一台机器上，但不建议这么做
 3. 建议机器数量及部署方式如下：
-    
+
     | 机器数量 | 部署方式 | 备注 |
     | --- | --- | --- |
     | 1 | 全部模块部署在一台机器上 | 无app测试环境 |
@@ -413,7 +413,7 @@ DiOne 3.0 beta安装部署
     erlang
     python
 ```
-    
+
 ### 1. 安装准备
 - 准备安装目录，建议安装在系统中较大的分区中的公共目录。<font color="red">不能安装在用户家目录下</font>
 - 下载安装包。并解压
@@ -430,7 +430,7 @@ DiOne 3.0 beta安装部署
 
 
         # 根域
-        BASE_DNS=bking.com
+        BASE_DNS=dione.com
         # PAAS平台的域名前缀
         PAAS_DNS_PREFIX=paas
         # 配置平台的域名前缀
@@ -453,7 +453,7 @@ DiOne 3.0 beta安装部署
         PAASAGENT_MODE=test
         # PAASAGENT是否独立部署：如果本机要安装PAASAGENT，则要设置该选项。如果本机要同时安装PAAS和PAASAGENT，请设置为 no，否则设置为 yes
         PAASAGENT_ONLY=yes
-        # ---------- new add ----------------
+        # ----------bkv3.0.0 new add----------------
         # zookeeper的IP地址，zookeeper 与基础模板安装在同一服务器上，填写所在基础模块服务器的内网IP地址
         ZK_IP=x.x.x.x
         # mysql数据库所在服务器IP，即基础模块所在服务器的内网IP地址
@@ -471,7 +471,7 @@ DiOne 3.0 beta安装部署
     - `rabbitmq`
     - `tomcat`
     - `zookeeper`
- 
+
 
 - 基础模块，会安装 `cmdb`，`paas`，`job` 3个基础平台，`gse` 管控通道,  以及他们依赖的服务，**这些服务安装到同一台机器上**
 在3.0 中，沿用了2.0的做法，依次执行如下操作， 操作前请确保已正确配置 `bk.conf`：
@@ -484,7 +484,7 @@ DiOne 3.0 beta安装部署
     ```
 - 上述步骤操作完成之后，通过 `./bk.sh summary` 可以查看基础模块所有服务的运行状况
 
-> Note: 
+> Note:
 > 若执行`./bk.sh summary` 提示`Monit: the monit daemon is not running`, 可以通过命令手动执行启动：`./bk.sh start monit` 启动 `monit`，`5-10`分钟后，再执行`./bk.sh summary`查看状态
 
 ### 3. PaasAgent 安装
@@ -493,14 +493,14 @@ DiOne 3.0 beta安装部署
 - `PaasAgent`的安装类似基础模块：依次执行如下操作， 操作前请确保已正确配置 `bk.conf` ,  
     - 如果是正式环境，`bk.conf` 中的 `PAASAGENT_MODE` 设置为 `prod`.
     - 如果是测试环境，`PAASAGENT_MODE` 设置为 `test`.
-    
+
     ```bash
     $ cd bksuite-3.0.9-beta
     $ vi bk.conf    # 根据说明编辑好 bk.conf 文件
     $ ./bk.sh init paasagent
     $ ./bk.sh install paasagent
     $ ./bk.sh install rabbitmq
-    ``` 
+    ```
 
 ### 4. datasvr安装
 
@@ -519,34 +519,34 @@ DiOne 3.0 beta安装部署
     以上步骤中包含了安装 `Kafka` 的步骤, 并自动配置了相关的服务
     正常启动的情况下，cd 到安装目录下，通过以下命令，看到的服务，应该都是在 `RUNNING` 状态
     `common/python/bin/supervisorctl -c datasvr/bk_conf/common/supervisord.conf status`
-    
+
     > Note: datasvr 不能使用 ./bk.sh summary 来查看状态
 
 ### 5. App (SaaS应用)安装部署
 - 安装 `agent_setup app`
-     
+
      `agent安装`的安装包已经打包在完整包中，在开发者中心点击部署即可。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 找到`bk_agent_setup` 所在的行，点击部署
 
 - 安装DiOne监控`app`
     DiOne监控包含了一个纯后台的子模块，请求 `paas`接口 需要进行 `token` 认证的步骤。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传监控 `app` 的 `SaaS` 安装包，点击一键部署
     - <font color="red">4. 登陆 `datasvr` 所在机器，进入安装目录，执行脚本`./update_monitor_token.sh`</font>。
 
 - 安装日志检索`app`
-    
+
     与 App: `agent安装`不一样， 该包从 Smart 市场下载，通过上传的方式进行部署。多了一个上传步骤
-    
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传日志检索 `app` 的 `SaaS` 安装包，点击一键部署
     - 4. 日志检索 `app` 需要调用监控 `app` 后台的接口，因此<font color="red">在使用日志检索前, 确保已经按照安装监控`app`的步骤操正常安装了监控 `app`</font>
 - 安装包管理`app`
     同DiOne监控一样，包管理 app 也是一个包含后台应用子模块。需要进行 `token` 认证。
-    - 1. 打开`paas.bking.com` (`bk.conf`中配置的paas所在域名)
+    - 1. 打开`paas.dione.com` (`bk.conf`中配置的paas所在域名)
     - 2. 进入开发者中心 -> 内置应用， 点击一键部署应用
     - 3. 上传包管理 `app` 的 `SaaS` 安装包，点击一键部署
     - <font color="metagan">4. 登陆 `datasvr` 所在机器，进入安装目录，执行脚本`./add_wlist_cdman.sh`。</font>
@@ -650,15 +650,15 @@ cd ${bksuite安装路径}/gse
         $ 启动： common/php/php-fpm.sh start
         $ 停止：common/php/php-fpm.sh stop
         ```
-    
+
 ##### job
 - `job` 平台依赖于 `tomcat`
-    
+
     ```
     $ job/job.sh start
     $ job/job.sh stop
     ```
-    
+
 ##### gitserver
 - `gitserver` 是包管理 `App` 的后台程序, 在安装 `PaaS` 的时候，会自动启动.
 
@@ -683,7 +683,7 @@ $ cd  ${INSTALL_PATH}
 ##### SaaS app
 - 内置应用的恢复
     在 `app` 无法访问时，可以通过这个方式进行恢复，进入安装目录执行：
-    
+
     `$ paas/paas_agent/paasagent/bin/recover_apps.sh  paas/paas_agent/apps/`
 
 #### 3. datasvr服务管理
@@ -814,5 +814,3 @@ $ ./common/beanstalkd/bin/beanstalkd -p 14721 -b datasvr/bk_run_data/bkdata/bk_b
     cd datasvr/bkdata/bk_bkdata_monitor; ./bin/start.sh
     cd datasvr/bkdata/bk_bkdata_monitor; ./bin/stop.sh
     ```
-
-

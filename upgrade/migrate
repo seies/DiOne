@@ -162,7 +162,7 @@ ldconfig
 
 sleep 2
 case $module in
-    paas) 
+    paas)
         confirm_required
 
         echo "start upgrading ..."

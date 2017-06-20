@@ -4,7 +4,7 @@ usage () {
     echo "USAGE:"
     echo "  ${BASH_SOURCE##*/} VERSION_PATH { paas | module }"
     echo ""
-    echo " VERSION_PATH  absolute path of dione-suite 2.x, usually at /data/seies-v2.0.1"
+    echo " VERSION_PATH  absolute path of bksuite 2.x, usually at /data/bkv2.0.1"
     echo ""
 
     exit 0
